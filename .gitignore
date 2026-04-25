@@ -68,3 +68,7 @@ Thumbs.db
 *.temp
 *.swp
 *.swo
+
+#backend
+Backend/.env
+

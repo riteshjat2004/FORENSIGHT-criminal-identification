@@ -1,4 +1,4 @@
-#+ FORENSIGHT — Criminal Identification
+## FORENSIGHT — Criminal Identification
 
 > Web application for criminal identification with a React (Vite) frontend and a Flask backend.
 
