@@ -1,0 +1,70 @@
+# Node modules
+node_modules/
+Frontend/node_modules/
+Backend/node_modules/
+
+# Build outputs
+dist/
+build/
+
+# Environment files
+.env
+.env.local
+.env.*.local
+.env.production
+.env.staging
+
+# Backup for moved sensitive files
+.secrets_backup/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+venv/
+env/
+.venv/
+.Python
+
+# IDEs and OS files
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# Databases
+*.sqlite3
+*.db
+*.sqlite
+
+# Keys and certificates
+*.pem
+*.key
+*.crt
+*.cer
+
+# Logs
+npm-debug.log*
+yarn-debug.log*
+pnpm-debug.log*
+*.log
+
+# Misc caches
+/.cache/
+.cache/
+
+# OS generated files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# Temporary files
+*.tmp
+*.temp
+*.swp
+*.swo
