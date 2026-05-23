@@ -2,6 +2,7 @@ import { useState, useEffect } from "react";
 import styles from "./AdminUpload.module.css";
 
 export default function AdminUpload() {
+  const API_BASE = import.meta.env.VITE_API_BASE || "http://localhost:8000";
   const [form, setForm] = useState({
     name: "",
     age: "",
@@ -39,7 +40,7 @@ export default function AdminUpload() {
     try {
       setLoading(true);
 
-      const res = await fetch("http://localhost:8000/api/enroll", {
+      const res = await fetch(`${API_BASE}/api/enroll`, {
         method: "POST",
         headers: { Authorization: `Bearer ${token}` },
         body: formData,

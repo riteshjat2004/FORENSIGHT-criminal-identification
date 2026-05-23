@@ -4,6 +4,8 @@ import { useNavigate } from "react-router-dom";
 export default function Signup() {
   const navigate = useNavigate();
 
+  const API_BASE = import.meta.env.VITE_API_BASE || "http://localhost:8000";
+
   const [form, setForm] = useState({
     name: "",
     email: "",
@@ -28,7 +30,7 @@ export default function Signup() {
       const payload =
         form.role === "ADMIN" ? form : { ...form, adminSecret: undefined };
 
-      const res = await fetch("http://localhost:8000/api/auth/signup", {
+      const res = await fetch(`${API_BASE}/api/auth/signup`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",

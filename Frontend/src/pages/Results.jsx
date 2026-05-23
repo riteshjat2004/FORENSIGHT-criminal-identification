@@ -14,7 +14,7 @@ function dataUrlToFile(dataUrl, filename) {
 
 export default function Results() {
   const location = useLocation();
-  const API_BASE = useMemo(() => "http://localhost:8000", []);
+  const API_BASE = useMemo(() => import.meta.env.VITE_API_BASE || "http://localhost:8000", []);
 
   const [generatedImageUrl, setGeneratedImageUrl] = useState(() => {
     return (

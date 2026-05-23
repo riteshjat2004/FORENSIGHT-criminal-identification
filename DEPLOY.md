@@ -47,6 +47,11 @@ Notes and caveats
 - Keep secrets (DB URIs, API keys) in the host's environment settings — do not commit them to source.
 
 Next steps I can do for you:
-- Add a Dockerfile for the Backend for reproducible builds on Render
-- Add a minimal vercel.json to pin Frontend config
-- Commit the small repo changes (Procfile + DEPLOY.md) to a branch and push
+- Add a minimal `vercel.json` to pin Frontend config (optional)
+- Commit any additional infra files or push a deploy branch if you want me to
+
+Additional notes:
+- I added `Backend/Dockerfile` to help with builds that require `tensorflow`/`deepface`.
+- Frontend now reads the API base from `import.meta.env.VITE_API_BASE` (set this env var in Vercel to your backend URL). The code falls back to `http://localhost:8000` when the env var is not provided.
+- Backend accepts allowed CORS origins via `ALLOWED_ORIGINS` env (comma-separated). Example:
+  - `ALLOWED_ORIGINS=https://your-frontend.vercel.app,https://www.your-domain.com`

@@ -51,24 +51,40 @@ DETECTOR = os.getenv("FACE_DETECTOR", "retinaface")
 ENFORCE = os.getenv("ENFORCE_DETECTION", "true").lower() in {"1", "true", "yes"}
 TIMEOUT = int(os.getenv("EMBEDDING_TIMEOUT_SECONDS", "180"))
 
-# Frontend origins (Vite)
-ALLOWED_ORIGINS = {
+# Frontend origins (Vite) — configurable via `ALLOWED_ORIGINS`
+# Provide a comma-separated list of allowed origins (example: https://app.example.com,https://www.example.com)
+# Use `ALLOWED_ORIGINS='*'` to allow all origins (not recommended for production).
+_DEFAULT_ALLOWED = {
     "http://localhost:5173",
     "http://127.0.0.1:5173",
     "http://localhost:5174",
     "http://127.0.0.1:5174",
 }
 
+_env_allowed = os.getenv("ALLOWED_ORIGINS", "").strip()
+if _env_allowed:
+    if _env_allowed == "*":
+        # None means allow all origins in the check below
+        ALLOWED_ORIGINS = None
+    else:
+        ALLOWED_ORIGINS = set([o.strip() for o in _env_allowed.split(",") if o.strip()])
+else:
+    ALLOWED_ORIGINS = _DEFAULT_ALLOWED
+
 
 def _is_allowed_origin(origin: str | None) -> bool:
     if not origin:
         return False
+
+    # If ALLOWED_ORIGINS is None, allow everything (explicit opt-in)
+    if ALLOWED_ORIGINS is None:
+        return True
+
     if origin in ALLOWED_ORIGINS:
         return True
 
-    # Dev convenience: Vite can auto-switch ports if 5173 is occupied.
-    # Allow a small port range on localhost/127.0.0.1.
-    m = re.match(r"^http://(localhost|127\.0\.0\.1):(\d+)$", origin)
+    # Dev convenience: allow localhost/127.0.0.1 on a small port range (Vite's auto-ports)
+    m = re.match(r"^https?://(localhost|127\.0\.0\.1):(\d+)$", origin)
     if not m:
         return False
     try:

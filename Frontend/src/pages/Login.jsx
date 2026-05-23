@@ -4,6 +4,8 @@ import { useNavigate } from "react-router-dom";
 export default function Login() {
   const navigate = useNavigate();
 
+  const API_BASE = import.meta.env.VITE_API_BASE || "http://localhost:8000";
+
   const [form, setForm] = useState({
     email: "",
     password: "",
@@ -22,7 +24,7 @@ export default function Login() {
     setError("");
 
     try {
-      const res = await fetch("http://localhost:8000/api/auth/login", {
+      const res = await fetch(`${API_BASE}/api/auth/login`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",

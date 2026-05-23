@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import styles from "./Home.module.css";
 
 export default function Home() {
-  const API_BASE = useMemo(() => "http://localhost:8000", []);
+  const API_BASE = useMemo(() => import.meta.env.VITE_API_BASE || "http://localhost:8000", []);
 
   const [criminals, setCriminals] = useState([]);
   const [activeIndex, setActiveIndex] = useState(0);
