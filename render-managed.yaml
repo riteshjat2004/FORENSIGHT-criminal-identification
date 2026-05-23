@@ -20,3 +20,5 @@ services:
       - key: FLASK_SECRET_KEY
       - key: ADMIN_SECRET_KEY
       - key: ALLOWED_ORIGINS
+      - key: PYTHON_VERSION
+        value: "3.11.9"

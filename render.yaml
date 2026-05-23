@@ -1,14 +1,17 @@
-# Render service descriptor for Docker-based deployment
-# Edit names and branch as needed before creating the service in Render.
+# Render service descriptor for managed Python deployment
+# This file configures a managed (non-Docker) Python service.
+# Ensure Backend/runtime.txt contains the desired Python runtime (python-3.11.9).
 
 services:
   - type: web
     name: forensight-backend
-    env: docker
-    dockerfilePath: Backend/Dockerfile
+    env: python
+    rootDirectory: Backend
     branch: main
     plan: starter
     autoDeploy: true
+    # Upgrade pip, setuptools and wheel first to avoid build back-end errors
+    buildCommand: python -m pip install --upgrade pip setuptools wheel && pip install -r requirements.txt
     startCommand: gunicorn app:app -b 0.0.0.0:$PORT -w 4
     envVars:
       - key: MONGO_CONNECTION_STRING
@@ -18,3 +21,5 @@ services:
       - key: FLASK_SECRET_KEY
       - key: ADMIN_SECRET_KEY
       - key: ALLOWED_ORIGINS
+      - key: PYTHON_VERSION
+        value: "3.11.9"
