@@ -10,7 +10,7 @@ services:
     branch: main
     plan: starter
     autoDeploy: true
-    buildCommand: pip install -r requirements.txt
+    buildCommand: python -m pip install --upgrade pip setuptools wheel && pip install -r requirements.txt
     startCommand: gunicorn app:app -b 0.0.0.0:$PORT -w 4
     envVars:
       - key: MONGO_CONNECTION_STRING
