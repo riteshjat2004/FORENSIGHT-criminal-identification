@@ -37,6 +37,7 @@ Deploy Backend to Render
   - Build Command: pip install -r requirements.txt
   - Start Command: gunicorn app:app -b 0.0.0.0:$PORT -w 4
   - Add required environment variables in Render settings: MONGO_CONNECTION_STRING, CLOUDINARY_CLOUD_NAME, CLOUDINARY_API_KEY, CLOUDINARY_API_SECRET, FLASK_SECRET_KEY, ADMIN_SECRET_KEY (optional), FACE_MODEL, FACE_DETECTOR, MATCH_THRESHOLD
+  - Quick config file: `render-managed.yaml` is included for a non-Docker (managed) Render service. You can import this into Render or use the same settings in the UI.
 
 - Option B: Render Docker service (recommended if TensorFlow/DeepFace install fails on the managed build)
   - Provide a Dockerfile in Backend/ that installs system deps and pip packages. Build and run via Docker on Render.
