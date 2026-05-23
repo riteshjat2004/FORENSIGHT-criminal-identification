@@ -1,0 +1,23 @@
+# Docker build context ignores for Backend
+# Keep local virtualenvs, caches and large build artifacts out of the image
+.venv
+venv
+env
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+*.db
+*.sqlite3
+*.log
+.env
+.env.*
+.git
+.gitignore
+node_modules/
+Frontend/
+Frontend/dist/
+dist/
+*.tar
+*.gz
