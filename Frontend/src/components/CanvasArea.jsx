@@ -2,7 +2,6 @@ import styles from "./CanvasArea.module.css";
 
 export default function CanvasArea({
   canvasRef,
-  selectedElement,
   gender,
   onGenderChange,
   onMouseDown,
@@ -19,16 +18,9 @@ export default function CanvasArea({
   matches,
   searchLoading,
   searchAttempted,
-  onRotate,
-  onMoveX,
-  onMoveY,
   canvasW,
   canvasH,
 }) {
-  const relPos = selectedElement
-    ? selectedElement.getRelativePosition(canvasW, canvasH)
-    : { x: 0, y: 0 };
-
   return (
     <main className={styles.area}>
       <canvas
@@ -136,38 +128,6 @@ export default function CanvasArea({
         </div>
       )}
 
-      {/* <div className={styles.transform}>
-        <label className={styles.label}> Rotate </label>
-        <input
-          type="range"
-          min="-3.14"
-          max="3.14"
-          step="0.01"
-          value={selectedElement ? selectedElement.rotation : 0}
-          className={styles.slider}
-          onChange={(e) => onRotate(parseFloat(e.target.value))}
-        />
-
-        <label className={styles.label}> X </label>
-        <input
-          type="range"
-          min="-200"
-          max="200"
-          value={Math.round(relPos.x)}
-          className={styles.slider}
-          onChange={(e) => onMoveX(parseFloat(e.target.value))}
-        />
-
-        <label className={styles.label}> Y </label>
-        <input
-          type="range"
-          min="-200"
-          max="200"
-          value={Math.round(relPos.y)}
-          className={styles.slider}
-          onChange={(e) => onMoveY(parseFloat(e.target.value))}
-        />
-      </div> */}
 
       {Array.isArray(matches) && matches.length > 0 && (
         <div className={styles.results}>

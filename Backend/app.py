@@ -1,7 +1,7 @@
 import io
 import os
 import numpy as np
-from datetime import datetime
+from datetime import datetime, timezone
 import multiprocessing
 import re
 from functools import wraps
@@ -20,6 +20,8 @@ import cloudinary.uploader
 # ==============================
 # LOAD ENV
 # ==============================
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+load_dotenv(os.path.join(BASE_DIR, ".env"))
 load_dotenv()
 
 # ==============================
@@ -83,6 +85,13 @@ def _is_allowed_origin(origin: str | None) -> bool:
     if origin in ALLOWED_ORIGINS:
         return True
 
+    # Support wildcard patterns like https://*.vercel.app or *.vercel.app
+    for allowed in ALLOWED_ORIGINS:
+        if "*" in allowed:
+            pattern = "^" + re.escape(allowed).replace(r"\*", ".*") + "$"
+            if re.match(pattern, origin):
+                return True
+
     # Dev convenience: allow localhost/127.0.0.1 on a small port range (Vite's auto-ports)
     m = re.match(r"^https?://(localhost|127\.0\.0\.1):(\d+)$", origin)
     if not m:
@@ -91,7 +100,16 @@ def _is_allowed_origin(origin: str | None) -> bool:
         port = int(m.group(2))
     except Exception:
         return False
-    return 5173 <= port <= 5180
+    return 5173 <= port <= 5185
+
+
+@app.before_request
+def handle_options_preflight():
+    if request.method == "OPTIONS":
+        origin = request.headers.get("Origin")
+        if _is_allowed_origin(origin):
+            resp = app.make_default_options_response()
+            return resp
 
 
 @app.after_request
@@ -145,7 +163,15 @@ def require_auth(required_role=None):
 # UTIL FUNCTIONS
 # ==============================
 def file_to_numpy(file_bytes):
-    return np.array(Image.open(io.BytesIO(file_bytes)).convert("RGB"))
+    img = Image.open(io.BytesIO(file_bytes))
+    # If transparent PNG or paletted with alpha, composite onto clean white background
+    if img.mode in ("RGBA", "LA") or (img.mode == "P" and "transparency" in img.info):
+        bg = Image.new("RGB", img.size, (255, 255, 255))
+        if img.mode != "RGBA":
+            img = img.convert("RGBA")
+        bg.paste(img, mask=img.split()[3])
+        return np.array(bg)
+    return np.array(img.convert("RGB"))
 
 
 def compute_embedding_worker(file_bytes):
@@ -154,25 +180,25 @@ def compute_embedding_worker(file_bytes):
         from deepface import DeepFace
 
         img = file_to_numpy(file_bytes)
+        reps = None
 
-        # First attempt: configured detector and enforcement
-        reps = []
+        # 1. Primary detector (e.g. retinaface) with enforce_detection=False so it never hard-crashes
         try:
             reps = DeepFace.represent(
                 img_path=img,
                 model_name=MODEL,
                 detector_backend=DETECTOR,
-                enforce_detection=ENFORCE,
+                enforce_detection=False,
             )
         except Exception as e:
             try:
-                print("DeepFace represent primary failed:", repr(e))
+                print("DeepFace primary detector failed:", repr(e))
             except Exception:
                 pass
-            reps = []
+            reps = None
 
-        # Fallback: relax detection (helps for low-res / non-photographic faces)
-        if not reps and not ENFORCE:
+        # 2. Secondary fallback: fast OpenCV detector
+        if not reps:
             try:
                 reps = DeepFace.represent(
                     img_path=img,
@@ -182,10 +208,26 @@ def compute_embedding_worker(file_bytes):
                 )
             except Exception as e:
                 try:
-                    print("DeepFace represent fallback failed:", repr(e))
+                    print("DeepFace OpenCV detector fallback failed:", repr(e))
                 except Exception:
                     pass
-                reps = []
+                reps = None
+
+        # 3. Third fallback: skip detector (handles sketches, composites, low-contrast, or cropped faces)
+        if not reps:
+            try:
+                reps = DeepFace.represent(
+                    img_path=img,
+                    model_name=MODEL,
+                    detector_backend="skip",
+                    enforce_detection=False,
+                )
+            except Exception as e:
+                try:
+                    print("DeepFace skip detector fallback failed:", repr(e))
+                except Exception:
+                    pass
+                reps = None
 
         if not reps:
             try:
@@ -196,7 +238,7 @@ def compute_embedding_worker(file_bytes):
 
         emb = np.array(reps[0]["embedding"], dtype=np.float32)
         norm = float(np.linalg.norm(emb))
-        if norm == 0:
+        if norm == 0 or np.isnan(norm):
             return None
 
         emb = emb / norm
@@ -251,9 +293,14 @@ def upload_image(file_bytes):
 
 
 def cosine_score(a, b):
-    a = np.array(a)
-    b = np.array(b)
-    return np.dot(a, b) / (np.linalg.norm(a) * np.linalg.norm(b))
+    a = np.array(a, dtype=np.float32)
+    b = np.array(b, dtype=np.float32)
+    norm_a = float(np.linalg.norm(a))
+    norm_b = float(np.linalg.norm(b))
+    if norm_a == 0.0 or norm_b == 0.0 or np.isnan(norm_a) or np.isnan(norm_b):
+        return 0.0
+    val = float(np.dot(a, b) / (norm_a * norm_b))
+    return 0.0 if np.isnan(val) else val
 
 
 # ==============================
@@ -296,7 +343,7 @@ def api_signup():
             "email": email,
             "passwordHash": generate_password_hash(password),
             "role": role,
-            "createdAt": datetime.utcnow(),
+            "createdAt": datetime.now(timezone.utc),
         }
     )
 
@@ -348,8 +395,8 @@ def api_upload_and_match():
 
     sex_filter = (request.form.get("sex_filter") or "").strip()
     mongo_query = {}
-    if sex_filter:
-        mongo_query["sex"] = sex_filter
+    if sex_filter and sex_filter.lower() != "any":
+        mongo_query["sex"] = {"$regex": f"^{re.escape(sex_filter)}$", "$options": "i"}
 
     results = []
     for doc in collection.find(mongo_query):
@@ -420,7 +467,7 @@ def api_enroll():
             "status": status,
             "imageURL": image_url,
             "embedding": embedding,
-            "createdAt": datetime.utcnow(),
+            "createdAt": datetime.now(timezone.utc),
         }
     except Exception:
         return jsonify({"message": "Invalid form fields"}), 400
@@ -445,8 +492,8 @@ def api_members_search():
         "name": {"$regex": re.escape(name), "$options": "i"}
     }
 
-    if sex and sex != "Any":
-        mongo_query["sex"] = sex
+    if sex and sex.lower() != "any":
+        mongo_query["sex"] = {"$regex": f"^{re.escape(sex)}$", "$options": "i"}
 
     members = []
     for doc in collection.find(mongo_query).sort("createdAt", -1).limit(25):
@@ -507,9 +554,28 @@ def api_latest_criminals():
     return jsonify({"criminals": criminals}), 200
 
 
+@app.route("/api/health", methods=["GET", "OPTIONS"])
+def health_check():
+    if request.method == "OPTIONS":
+        return ("", 204)
+    return jsonify({
+        "status": "healthy",
+        "service": "FORENSIGHT Face Recognition API",
+        "timestamp": datetime.now(timezone.utc).isoformat()
+    }), 200
+
+
 @app.get("/")
 def index():
-    return render_template("index.html", matches=None)
+    try:
+        return render_template("index.html", matches=None)
+    except Exception:
+        return jsonify({
+            "status": "healthy",
+            "service": "FORENSIGHT Face Recognition API",
+            "message": "API is operational.",
+            "healthCheck": "/api/health"
+        }), 200
 
 
 @app.post("/enroll")
@@ -558,7 +624,7 @@ def enroll():
         "status": status,
         "imageURL": image_url,
         "embedding": embedding,
-        "createdAt": datetime.utcnow()
+        "createdAt": datetime.now(timezone.utc)
     }
 
     collection.insert_one(doc)
@@ -589,8 +655,8 @@ def search():
     results = []
 
     mongo_query = {}
-    if sex_filter:
-        mongo_query["sex"] = sex_filter
+    if sex_filter and sex_filter.lower() != "any":
+        mongo_query["sex"] = {"$regex": f"^{re.escape(sex_filter)}$", "$options": "i"}
 
     for doc in collection.find(mongo_query):
         if "embedding" not in doc:
@@ -616,7 +682,10 @@ def search():
     else:
         flash("❌ No matches", "warning")
 
-    return render_template("index.html", matches=results[:6])
+    try:
+        return render_template("index.html", matches=results[:6])
+    except Exception:
+        return jsonify({"matches": results[:6]}), 200
 
 
 # ==============================

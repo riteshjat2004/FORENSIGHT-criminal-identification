@@ -233,75 +233,6 @@ export function useCanvas(showToast) {
     s.resizeHandle = null;
   }, []);
 
-  // ─── Keyboard shortcuts ──────────────────────────────────────────────────
-  useEffect(() => {
-    const handler = (e) => {
-      if (!selectedIdRef.current) return;
-      const keys = [
-        "ArrowUp",
-        "ArrowDown",
-        "ArrowLeft",
-        "ArrowRight",
-        "Delete",
-        "Backspace",
-      ];
-      if (keys.includes(e.key)) e.preventDefault();
-
-      switch (e.key) {
-        case "Delete":
-        case "Backspace":
-          deleteSelected();
-          break;
-        case "ArrowUp":
-          if (e.shiftKey) {
-            bringForward();
-          } else {
-            setElements((prev) =>
-              prev
-                .map((el) =>
-                  el.id === selectedIdRef.current ? ((el.y -= 5), el) : el,
-                )
-                .map((el) => ({ ...el })),
-            );
-          }
-          break;
-        case "ArrowDown":
-          if (e.shiftKey) {
-            sendBackward();
-          } else {
-            setElements((prev) =>
-              prev
-                .map((el) =>
-                  el.id === selectedIdRef.current ? ((el.y += 5), el) : el,
-                )
-                .map((el) => ({ ...el })),
-            );
-          }
-          break;
-        case "ArrowLeft":
-          setElements((prev) =>
-            prev
-              .map((el) =>
-                el.id === selectedIdRef.current ? ((el.x -= 5), el) : el,
-              )
-              .map((el) => ({ ...el })),
-          );
-          break;
-        case "ArrowRight":
-          setElements((prev) =>
-            prev
-              .map((el) =>
-                el.id === selectedIdRef.current ? ((el.x += 5), el) : el,
-              )
-              .map((el) => ({ ...el })),
-          );
-          break;
-      }
-    };
-    window.addEventListener("keydown", handler);
-    return () => window.removeEventListener("keydown", handler);
-  }, []); // eslint-disable-line
-
   // ─── Layer controls ──────────────────────────────────────────────────────
   const deleteSelected = useCallback(() => {
     if (!selectedIdRef.current) {
@@ -340,6 +271,79 @@ export function useCanvas(showToast) {
       return next;
     });
   }, [showToast]);
+
+  // ─── Keyboard shortcuts ──────────────────────────────────────────────────
+  useEffect(() => {
+    const handler = (e) => {
+      if (!selectedIdRef.current) return;
+      const keys = [
+        "ArrowUp",
+        "ArrowDown",
+        "ArrowLeft",
+        "ArrowRight",
+        "Delete",
+        "Backspace",
+      ];
+      if (keys.includes(e.key)) e.preventDefault();
+
+      switch (e.key) {
+        case "Delete":
+        case "Backspace":
+          deleteSelected();
+          break;
+        case "ArrowUp":
+          if (e.shiftKey) {
+            bringForward();
+          } else {
+            setElements((prev) =>
+              prev.map((el) => {
+                if (el.id === selectedIdRef.current) {
+                  el.y -= 5;
+                }
+                return el;
+              }),
+            );
+          }
+          break;
+        case "ArrowDown":
+          if (e.shiftKey) {
+            sendBackward();
+          } else {
+            setElements((prev) =>
+              prev.map((el) => {
+                if (el.id === selectedIdRef.current) {
+                  el.y += 5;
+                }
+                return el;
+              }),
+            );
+          }
+          break;
+        case "ArrowLeft":
+          setElements((prev) =>
+            prev.map((el) => {
+              if (el.id === selectedIdRef.current) {
+                el.x -= 5;
+              }
+              return el;
+            }),
+          );
+          break;
+        case "ArrowRight":
+          setElements((prev) =>
+            prev.map((el) => {
+              if (el.id === selectedIdRef.current) {
+                el.x += 5;
+              }
+              return el;
+            }),
+          );
+          break;
+      }
+    };
+    window.addEventListener("keydown", handler);
+    return () => window.removeEventListener("keydown", handler);
+  }, [deleteSelected, bringForward, sendBackward]);
 
   // ─── Transform sliders ───────────────────────────────────────────────────
   const setRotation = useCallback((val) => {
@@ -385,18 +389,38 @@ export function useCanvas(showToast) {
     setSelectedId(id);
   }, []);
 
+  // ─── Export clean image (white background, no bounding boxes) ───────────
+  const exportCleanImage = useCallback(() => {
+    if (elementsRef.current.length === 0) return null;
+    const offscreen = document.createElement("canvas");
+    offscreen.width = CANVAS_W;
+    offscreen.height = CANVAS_H;
+    const ctx = offscreen.getContext("2d");
+
+    // Clean white background for AI face detectors and clean export
+    ctx.fillStyle = "#ffffff";
+    ctx.fillRect(0, 0, CANVAS_W, CANVAS_H);
+
+    // Draw all elements without selection outlines or handles
+    elementsRef.current.forEach((el) => el.draw(ctx, false));
+
+    return offscreen.toDataURL("image/png");
+  }, []);
+
   // ─── Download ────────────────────────────────────────────────────────────
   const downloadImage = useCallback(() => {
     if (elementsRef.current.length === 0) {
       showToast("Add some elements first!", "warning");
       return;
     }
+    const dataUrl = exportCleanImage();
+    if (!dataUrl) return;
     const link = document.createElement("a");
-    link.download = `face-${Date.now()}.png`;
-    link.href = canvasRef.current.toDataURL("image/png");
+    link.download = `suspect-composite-${Date.now()}.png`;
+    link.href = dataUrl;
     link.click();
     showToast("Image downloaded!", "success");
-  }, [showToast]);
+  }, [exportCleanImage, showToast]);
 
   return {
     canvasRef,
@@ -411,6 +435,7 @@ export function useCanvas(showToast) {
     setPositionX,
     setPositionY,
     selectById,
+    exportCleanImage,
     downloadImage,
     onMouseDown,
     onMouseMove,

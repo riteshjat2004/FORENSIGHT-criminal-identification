@@ -6,7 +6,9 @@ import os
 
 
 def main() -> None:
-    load_dotenv(".env")
+    base_dir = os.path.dirname(os.path.abspath(__file__))
+    load_dotenv(os.path.join(base_dir, ".env"))
+    load_dotenv()
 
     uri = os.getenv("MONGO_CONNECTION_STRING")
     print("URI_SET", bool(uri))

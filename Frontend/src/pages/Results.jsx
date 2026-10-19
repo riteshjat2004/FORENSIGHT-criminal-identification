@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { useLocation } from "react-router-dom";
 import styles from "./Results.module.css";
 
@@ -43,61 +43,65 @@ export default function Results() {
     }
   }, [location.state]);
 
-  const runSearch = async (e) => {
-    e?.preventDefault?.();
+  const runSearch = useCallback(
+    async (e) => {
+      e?.preventDefault?.();
 
-    const token = localStorage.getItem("token");
-    if (!token) {
-      alert("Please login first");
-      return;
-    }
-
-    const imageFile = generatedImageUrl
-      ? dataUrlToFile(generatedImageUrl, `generated-${Date.now()}.png`)
-      : null;
-
-    if (!imageFile) {
-      alert("Please generate an image first");
-      return;
-    }
-
-    const formData = new FormData();
-    formData.append("image", imageFile);
-    if (gender && gender !== "Any") formData.append("sex_filter", gender);
-
-    try {
-      setLoading(true);
-      const res = await fetch(`${API_BASE}/api/upload`, {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${token}`,
-        },
-        body: formData,
-      });
-
-      const data = await res.json();
-      if (!res.ok) {
-        alert(data.error || data.message || "Search failed");
-        setMatches([]);
+      const token = localStorage.getItem("token");
+      if (!token) {
+        alert("Please login first");
         return;
       }
 
-      const sorted = (data.matches || []).sort((a, b) => b.score - a.score);
-      setMatches(sorted);
-    } catch (err) {
-      alert("Server error");
-      setMatches([]);
-    } finally {
-      setLoading(false);
-    }
-  };
+      const imageFile = generatedImageUrl
+        ? dataUrlToFile(generatedImageUrl, `generated-${Date.now()}.png`)
+        : null;
+
+      if (!imageFile) {
+        alert("Please generate an image first");
+        return;
+      }
+
+      const formData = new FormData();
+      formData.append("image", imageFile);
+      if (gender && gender !== "Any") formData.append("sex_filter", gender);
+
+      try {
+        setLoading(true);
+        const res = await fetch(`${API_BASE}/api/upload`, {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${token}`,
+          },
+          body: formData,
+        });
+
+        const data = await res.json();
+        if (!res.ok) {
+          alert(data.error || data.message || "Search failed");
+          setMatches([]);
+          return;
+        }
+
+        const sorted = (data.matches || []).sort((a, b) => b.score - a.score);
+        setMatches(sorted);
+      } catch (err) {
+        console.error("Search request error:", err);
+        alert("Server error");
+        setMatches([]);
+      } finally {
+        setLoading(false);
+      }
+    },
+    [generatedImageUrl, gender, API_BASE],
+  );
 
   useEffect(() => {
     if (!autoSearched && generatedImageUrl) {
       setAutoSearched(true);
       runSearch();
     }
-  }, [autoSearched, generatedImageUrl]);
+  }, [autoSearched, generatedImageUrl, runSearch]);
 
   return (
     <div className={styles.page}>

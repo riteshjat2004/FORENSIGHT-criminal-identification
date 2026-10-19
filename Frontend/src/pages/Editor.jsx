@@ -37,6 +37,7 @@ export default function Editor() {
     setPositionX,
     setPositionY,
     selectById,
+    exportCleanImage,
     downloadImage,
     onMouseDown,
     onMouseMove,
@@ -92,7 +93,7 @@ export default function Editor() {
         sorted.length ? `Found ${sorted.length} match(es)` : "No matches",
         sorted.length ? "success" : "info",
       );
-    } catch (e) {
+    } catch {
       showToast("Server error", "warning");
     } finally {
       setMatchLoading(false);
@@ -100,7 +101,6 @@ export default function Editor() {
   };
 
   const generatePreview = () => {
-    if (!canvasRef.current) return;
     if (elements.length === 0) {
       showToast("Add some elements first!", "warning");
       return;
@@ -109,7 +109,8 @@ export default function Editor() {
       showToast("Please select a gender.", "warning");
       return;
     }
-    const url = canvasRef.current.toDataURL("image/png");
+    const url = exportCleanImage?.() || canvasRef.current?.toDataURL("image/png");
+    if (!url) return;
     setGeneratedImageUrl(url);
     setSearchAttempted(false);
     setMatches([]);

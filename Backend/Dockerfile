@@ -2,10 +2,11 @@ FROM python:3.11-slim
 
 ENV PYTHONDONTWRITEBYTECODE=1
 ENV PYTHONUNBUFFERED=1
+ENV PORT=8000
 
 WORKDIR /app
 
-# Install system deps required by OpenCV / Pillow and some DeepFace backends
+# Install system deps required by OpenCV / Pillow and DeepFace backends
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
     ffmpeg \
@@ -26,5 +27,5 @@ COPY . /app
 
 EXPOSE 8000
 
-# Use gunicorn for production
-CMD ["gunicorn", "app:app", "-b", "0.0.0.0:8000", "-w", "4"]
+# Use gunicorn for production with dynamic $PORT binding and timeout for deepface
+CMD ["sh", "-c", "gunicorn app:app -b 0.0.0.0:${PORT:-8000} -w 1 --threads 4 --timeout 180"]

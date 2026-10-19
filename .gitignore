@@ -3,9 +3,10 @@ node_modules/
 Frontend/node_modules/
 Backend/node_modules/
 
-# Build outputs
-# dist/
-# build/
+# Build outputs & caches
+.vite/
+dist/
+Frontend/dist/
 
 # Environment files
 .env
@@ -71,4 +72,6 @@ Thumbs.db
 
 #backend
 Backend/.env
+
+faces
 
