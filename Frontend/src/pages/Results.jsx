@@ -12,6 +12,47 @@ function dataUrlToFile(dataUrl, filename) {
   return new File([blob], filename, { type: mime });
 }
 
+async function prepareOptimizedImageFile(dataUrl, filename) {
+  return new Promise((resolve) => {
+    try {
+      const img = new Image();
+      img.onload = () => {
+        const MAX_DIM = 640;
+        let { width, height } = img;
+        if (width > MAX_DIM || height > MAX_DIM) {
+          if (width > height) {
+            height = Math.round((height * MAX_DIM) / width);
+            width = MAX_DIM;
+          } else {
+            width = Math.round((width * MAX_DIM) / height);
+            height = MAX_DIM;
+          }
+        }
+        const canvas = document.createElement("canvas");
+        canvas.width = width;
+        canvas.height = height;
+        const ctx = canvas.getContext("2d");
+        ctx.drawImage(img, 0, 0, width, height);
+        canvas.toBlob(
+          (blob) => {
+            if (blob) {
+              resolve(new File([blob], filename, { type: "image/jpeg" }));
+            } else {
+              resolve(dataUrlToFile(dataUrl, filename));
+            }
+          },
+          "image/jpeg",
+          0.92
+        );
+      };
+      img.onerror = () => resolve(dataUrlToFile(dataUrl, filename));
+      img.src = dataUrl;
+    } catch {
+      resolve(dataUrlToFile(dataUrl, filename));
+    }
+  });
+}
+
 export default function Results() {
   const location = useLocation();
   const API_BASE = useMemo(() => {
@@ -56,28 +97,36 @@ export default function Results() {
         return;
       }
 
-      const imageFile = generatedImageUrl
-        ? dataUrlToFile(generatedImageUrl, `generated-${Date.now()}.png`)
-        : null;
-
-      if (!imageFile) {
-        alert("Please generate an image first");
+      if (!generatedImageUrl) {
+        alert("Please generate or select an image first");
         return;
       }
 
-      const formData = new FormData();
-      formData.append("image", imageFile);
-      if (gender && gender !== "Any") formData.append("sex_filter", gender);
+      setLoading(true);
 
       try {
-        setLoading(true);
+        const imageFile = await prepareOptimizedImageFile(
+          generatedImageUrl,
+          `search-${Date.now()}.jpg`
+        );
+
+        const formData = new FormData();
+        formData.append("image", imageFile);
+        if (gender && gender !== "Any") formData.append("sex_filter", gender);
+
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 45000);
+
         const res = await fetch(`${API_BASE}/api/upload`, {
           method: "POST",
           headers: {
             Authorization: `Bearer ${token}`,
           },
           body: formData,
+          signal: controller.signal,
         });
+
+        clearTimeout(timeoutId);
 
         let data = {};
         try {
@@ -96,7 +145,11 @@ export default function Results() {
         setMatches(sorted);
       } catch (err) {
         console.error("Search request error:", err);
-        alert(err?.message || "Server error: could not connect to server");
+        if (err.name === "AbortError") {
+          alert("Search timed out. The server is busy, please try again in a moment.");
+        } else {
+          alert(err?.message || "Server error: could not connect to server");
+        }
         setMatches([]);
       } finally {
         setLoading(false);

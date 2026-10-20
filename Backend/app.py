@@ -166,6 +166,14 @@ def require_auth(required_role=None):
 # ==============================
 def file_to_numpy(file_bytes):
     img = Image.open(io.BytesIO(file_bytes))
+
+    # Pre-scale high-resolution images to max 640px.
+    # DeepFace Facenet512 accepts 160x160 inputs; processing 2444x1718 or 4000x3000
+    # images wastes CPU cycles, increases memory usage, and causes 30s+ timeouts on cloud CPUs.
+    MAX_DIM = 640
+    if max(img.size) > MAX_DIM:
+        img.thumbnail((MAX_DIM, MAX_DIM), Image.Resampling.LANCZOS)
+
     # If transparent PNG or paletted with alpha, composite onto clean white background
     if img.mode in ("RGBA", "LA") or (img.mode == "P" and "transparency" in img.info):
         bg = Image.new("RGB", img.size, (255, 255, 255))
@@ -376,28 +384,42 @@ def api_upload_and_match():
     if sex_filter and sex_filter.lower() != "any":
         mongo_query["sex"] = {"$regex": f"^{re.escape(sex_filter)}$", "$options": "i"}
 
+    # Project only fields needed for results to minimize network payload
+    projection = {
+        "name": 1,
+        "age": 1,
+        "sex": 1,
+        "crime": 1,
+        "status": 1,
+        "imageURL": 1,
+        "embedding": 1,
+    }
+
+    docs = list(collection.find(mongo_query, projection))
+    valid_docs = [d for d in docs if "embedding" in d and len(d["embedding"]) == 512]
+
     results = []
-    for doc in collection.find(mongo_query):
-        if "embedding" not in doc:
-            continue
+    if valid_docs:
+        q_vec = np.array(query_emb, dtype=np.float32)
+        db_matrix = np.array([d["embedding"] for d in valid_docs], dtype=np.float32)
 
-        try:
-            score = cosine_score(query_emb, doc["embedding"])
-        except Exception:
-            continue
+        # Vectorized cosine similarity: both q_vec and stored embeddings are already unit-normalized
+        scores = np.dot(db_matrix, q_vec)
 
-        if score >= THRESHOLD:
-            results.append(
-                {
-                    "name": doc.get("name"),
-                    "age": doc.get("age"),
-                    "sex": doc.get("sex"),
-                    "crime": doc.get("crime"),
-                    "status": doc.get("status"),
-                    "imageURL": doc.get("imageURL"),
-                    "score": float(score),
-                }
-            )
+        for doc, score in zip(valid_docs, scores):
+            sc = float(score)
+            if sc >= THRESHOLD:
+                results.append(
+                    {
+                        "name": doc.get("name"),
+                        "age": doc.get("age"),
+                        "sex": doc.get("sex"),
+                        "crime": doc.get("crime"),
+                        "status": doc.get("status"),
+                        "imageURL": doc.get("imageURL"),
+                        "score": sc,
+                    }
+                )
 
     results.sort(key=lambda x: x["score"], reverse=True)
     return jsonify({"matches": results[:6]}), 200
