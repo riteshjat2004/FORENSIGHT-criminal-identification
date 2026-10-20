@@ -4,7 +4,8 @@ import { useNavigate } from "react-router-dom";
 export default function Signup() {
   const navigate = useNavigate();
 
-  const API_BASE = import.meta.env.VITE_API_BASE || "http://localhost:8000";
+  const rawApi = import.meta.env.VITE_API_URL || import.meta.env.VITE_API_BASE || "http://localhost:8000";
+  const API_BASE = rawApi.replace(/\/+$/, "");
 
   const [form, setForm] = useState({
     name: "",
@@ -38,15 +39,20 @@ export default function Signup() {
         body: JSON.stringify(payload),
       });
 
-      const data = await res.json();
+      let data = {};
+      try {
+        data = await res.json();
+      } catch {
+        data = {};
+      }
 
       if (res.ok) {
         navigate("/login");
       } else {
-        setError(data.message || "Signup failed");
+        setError(data.message || `Signup failed (HTTP ${res.status})`);
       }
-    } catch {
-      setError("Server error");
+    } catch (err) {
+      setError(err?.message || "Server error: could not connect to server");
     } finally {
       setLoading(false);
     }

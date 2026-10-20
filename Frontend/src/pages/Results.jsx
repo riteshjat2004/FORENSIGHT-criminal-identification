@@ -14,7 +14,10 @@ function dataUrlToFile(dataUrl, filename) {
 
 export default function Results() {
   const location = useLocation();
-  const API_BASE = useMemo(() => import.meta.env.VITE_API_BASE || "http://localhost:8000", []);
+  const API_BASE = useMemo(() => {
+    const raw = import.meta.env.VITE_API_URL || import.meta.env.VITE_API_BASE || "http://localhost:8000";
+    return raw.replace(/\/+$/, "");
+  }, []);
 
   const [generatedImageUrl, setGeneratedImageUrl] = useState(() => {
     return (
@@ -76,9 +79,15 @@ export default function Results() {
           body: formData,
         });
 
-        const data = await res.json();
+        let data = {};
+        try {
+          data = await res.json();
+        } catch {
+          data = {};
+        }
+
         if (!res.ok) {
-          alert(data.error || data.message || "Search failed");
+          alert(data.error || data.message || `Search failed (HTTP ${res.status})`);
           setMatches([]);
           return;
         }
@@ -87,7 +96,7 @@ export default function Results() {
         setMatches(sorted);
       } catch (err) {
         console.error("Search request error:", err);
-        alert("Server error");
+        alert(err?.message || "Server error: could not connect to server");
         setMatches([]);
       } finally {
         setLoading(false);

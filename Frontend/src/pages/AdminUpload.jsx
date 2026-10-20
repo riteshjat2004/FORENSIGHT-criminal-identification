@@ -2,7 +2,8 @@ import { useState, useEffect } from "react";
 import styles from "./AdminUpload.module.css";
 
 export default function AdminUpload() {
-  const API_BASE = import.meta.env.VITE_API_BASE || "http://localhost:8000";
+  const rawApi = import.meta.env.VITE_API_URL || import.meta.env.VITE_API_BASE || "http://localhost:8000";
+  const API_BASE = rawApi.replace(/\/+$/, "");
   const [form, setForm] = useState({
     name: "",
     age: "",

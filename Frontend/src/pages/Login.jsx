@@ -4,7 +4,8 @@ import { useNavigate } from "react-router-dom";
 export default function Login() {
   const navigate = useNavigate();
 
-  const API_BASE = import.meta.env.VITE_API_BASE || "http://localhost:8000";
+  const rawApi = import.meta.env.VITE_API_URL || import.meta.env.VITE_API_BASE || "http://localhost:8000";
+  const API_BASE = rawApi.replace(/\/+$/, "");
 
   const [form, setForm] = useState({
     email: "",
@@ -32,21 +33,26 @@ export default function Login() {
         body: JSON.stringify(form),
       });
 
-      const data = await res.json();
+      let data = {};
+      try {
+        data = await res.json();
+      } catch {
+        data = {};
+      }
 
       if (res.ok) {
         localStorage.setItem("token", data.token);
-        localStorage.setItem("role", data.user.role);
+        localStorage.setItem("role", data.user?.role || "NORMAL");
         window.dispatchEvent(new Event("authchange"));
 
         document.documentElement.requestFullscreen().catch(console.error);
 
         navigate("/");
       } else {
-        setError(data.message || "Login failed");
+        setError(data.message || `Login failed (HTTP ${res.status})`);
       }
-    } catch {
-      setError("Server error");
+    } catch (err) {
+      setError(err?.message || "Server error: could not connect to server");
     } finally {
       setLoading(false);
     }

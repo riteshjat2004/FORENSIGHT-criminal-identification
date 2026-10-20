@@ -12,7 +12,10 @@ export default function Editor() {
   const { toasts, showToast } = useToast();
   const navigate = useNavigate();
 
-  const API_BASE = useMemo(() => import.meta.env.VITE_API_BASE || "http://localhost:8000", []);
+  const API_BASE = useMemo(() => {
+    const raw = import.meta.env.VITE_API_URL || import.meta.env.VITE_API_BASE || "http://localhost:8000";
+    return raw.replace(/\/+$/, "");
+  }, []);
   const token = localStorage.getItem("token");
 
   const [generatedImageUrl, setGeneratedImageUrl] = useState(null);

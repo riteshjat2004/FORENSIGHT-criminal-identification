@@ -2,7 +2,10 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import styles from "./Home.module.css";
 
 export default function Home() {
-  const API_BASE = useMemo(() => import.meta.env.VITE_API_BASE || "http://localhost:8000", []);
+  const API_BASE = useMemo(() => {
+    const raw = import.meta.env.VITE_API_URL || import.meta.env.VITE_API_BASE || "http://localhost:8000";
+    return raw.replace(/\/+$/, "");
+  }, []);
 
   const [criminals, setCriminals] = useState([]);
   const [activeIndex, setActiveIndex] = useState(0);
@@ -15,7 +18,12 @@ export default function Home() {
     const run = async () => {
       try {
         const res = await fetch(`${API_BASE}/api/latest-criminals?limit=10`);
-        const data = await res.json();
+        let data = {};
+        try {
+          data = await res.json();
+        } catch {
+          data = {};
+        }
 
         if (!res.ok) {
           setApiError(`Failed to load (HTTP ${res.status})`);
@@ -23,8 +31,8 @@ export default function Home() {
         }
 
         setCriminals((data.criminals || []).filter((c) => c?.imageURL));
-      } catch {
-        setApiError("Backend not reachable");
+      } catch (err) {
+        setApiError(err?.message || "Backend not reachable");
       }
     };
 

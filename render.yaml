@@ -32,6 +32,6 @@ services:
       - key: FACE_MODEL
         value: "Facenet512"
       - key: FACE_DETECTOR
-        value: "retinaface"
+        value: "opencv"
       - key: PYTHON_VERSION
         value: "3.11.9"

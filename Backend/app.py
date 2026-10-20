@@ -3,10 +3,9 @@ import os
 import numpy as np
 from datetime import datetime, timezone
 import multiprocessing
+import threading
 import re
 from functools import wraps
-from concurrent.futures import ProcessPoolExecutor, TimeoutError
-from concurrent.futures.process import BrokenProcessPool
 
 from dotenv import load_dotenv
 from flask import Flask, flash, redirect, render_template, request, url_for, jsonify, g
@@ -49,13 +48,13 @@ cloudinary.config(
 # SETTINGS
 THRESHOLD = float(os.getenv("MATCH_THRESHOLD", "0.3"))
 MODEL = os.getenv("FACE_MODEL", "Facenet512")
-DETECTOR = os.getenv("FACE_DETECTOR", "retinaface")
-ENFORCE = os.getenv("ENFORCE_DETECTION", "true").lower() in {"1", "true", "yes"}
+DETECTOR = os.getenv("FACE_DETECTOR", "opencv")
+ENFORCE = os.getenv("ENFORCE_DETECTION", "false").lower() in {"1", "true", "yes"}
 TIMEOUT = int(os.getenv("EMBEDDING_TIMEOUT_SECONDS", "180"))
 
 # Frontend origins (Vite) — configurable via `ALLOWED_ORIGINS`
 # Provide a comma-separated list of allowed origins (example: https://app.example.com,https://www.example.com)
-# Use `ALLOWED_ORIGINS='*'` to allow all origins (not recommended for production).
+# Use `ALLOWED_ORIGINS='*'` to allow all origins.
 _DEFAULT_ALLOWED = {
     "http://localhost:5173",
     "http://127.0.0.1:5173",
@@ -66,7 +65,6 @@ _DEFAULT_ALLOWED = {
 _env_allowed = os.getenv("ALLOWED_ORIGINS", "").strip()
 if _env_allowed:
     if _env_allowed == "*":
-        # None means allow all origins in the check below
         ALLOWED_ORIGINS = None
     else:
         ALLOWED_ORIGINS = set([o.strip() for o in _env_allowed.split(",") if o.strip()])
@@ -85,14 +83,18 @@ def _is_allowed_origin(origin: str | None) -> bool:
     if origin in ALLOWED_ORIGINS:
         return True
 
-    # Support wildcard patterns like https://*.vercel.app or *.vercel.app
+    # Automatically allow Vercel production and preview domains
+    if origin.endswith(".vercel.app") or "vercel.app" in origin:
+        return True
+
+    # Support wildcard patterns like https://*.example.com
     for allowed in ALLOWED_ORIGINS:
         if "*" in allowed:
             pattern = "^" + re.escape(allowed).replace(r"\*", ".*") + "$"
             if re.match(pattern, origin):
                 return True
 
-    # Dev convenience: allow localhost/127.0.0.1 on a small port range (Vite's auto-ports)
+    # Dev convenience: allow localhost/127.0.0.1 on Vite ports (5173-5185)
     m = re.match(r"^https?://(localhost|127\.0\.0\.1):(\d+)$", origin)
     if not m:
         return False
@@ -174,31 +176,26 @@ def file_to_numpy(file_bytes):
     return np.array(img.convert("RGB"))
 
 
-def compute_embedding_worker(file_bytes):
-    """Runs inside subprocess (SAFE)"""
-    try:
-        from deepface import DeepFace
+_model_lock = threading.Lock()
 
-        img = file_to_numpy(file_bytes)
-        reps = None
 
-        # 1. Primary detector (e.g. retinaface) with enforce_detection=False so it never hard-crashes
+def get_embedding(file_bytes):
+    """
+    Extracts a 512-d normalized embedding vector using DeepFace with cascading fallbacks:
+    1. Fast built-in OpenCV Haar Cascade detector (<5ms, ~10MB RAM).
+    2. Configured secondary detector (if different from opencv).
+    3. Skip detector (direct input resize, ideal for sketches, composites, drawings).
+    Uses a thread lock to ensure safe model inference across Gunicorn threads without
+    spawning memory-heavy subprocesses.
+    """
+    with _model_lock:
         try:
-            reps = DeepFace.represent(
-                img_path=img,
-                model_name=MODEL,
-                detector_backend=DETECTOR,
-                enforce_detection=False,
-            )
-        except Exception as e:
-            try:
-                print("DeepFace primary detector failed:", repr(e))
-            except Exception:
-                pass
+            from deepface import DeepFace
+
+            img = file_to_numpy(file_bytes)
             reps = None
 
-        # 2. Secondary fallback: fast OpenCV detector
-        if not reps:
+            # 1. Primary fast detector: opencv
             try:
                 reps = DeepFace.represent(
                     img_path=img,
@@ -207,84 +204,65 @@ def compute_embedding_worker(file_bytes):
                     enforce_detection=False,
                 )
             except Exception as e:
-                try:
-                    print("DeepFace OpenCV detector fallback failed:", repr(e))
-                except Exception:
-                    pass
+                print("DeepFace opencv detector failed:", repr(e))
                 reps = None
 
-        # 3. Third fallback: skip detector (handles sketches, composites, low-contrast, or cropped faces)
-        if not reps:
-            try:
-                reps = DeepFace.represent(
-                    img_path=img,
-                    model_name=MODEL,
-                    detector_backend="skip",
-                    enforce_detection=False,
-                )
-            except Exception as e:
+            # 2. Secondary detector if configured and different from opencv
+            if not reps and DETECTOR != "opencv":
                 try:
-                    print("DeepFace skip detector fallback failed:", repr(e))
-                except Exception:
-                    pass
-                reps = None
+                    reps = DeepFace.represent(
+                        img_path=img,
+                        model_name=MODEL,
+                        detector_backend=DETECTOR,
+                        enforce_detection=False,
+                    )
+                except Exception as e:
+                    print(f"DeepFace {DETECTOR} detector failed:", repr(e))
+                    reps = None
 
-        if not reps:
-            try:
+            # 3. Third fallback: skip detector (handles composite sketches, drawings, and cropped faces)
+            if not reps:
+                try:
+                    reps = DeepFace.represent(
+                        img_path=img,
+                        model_name=MODEL,
+                        detector_backend="skip",
+                        enforce_detection=False,
+                    )
+                except Exception as e:
+                    print("DeepFace skip detector failed:", repr(e))
+                    reps = None
+
+            if not reps:
                 print("DeepFace returned no representations")
-            except Exception:
-                pass
+                return None
+
+            emb = np.array(reps[0]["embedding"], dtype=np.float32)
+            norm = float(np.linalg.norm(emb))
+            if norm == 0 or np.isnan(norm):
+                return None
+
+            emb = emb / norm
+            return emb.tolist()
+
+        except Exception as e:
+            print("Embedding extraction error:", repr(e))
             return None
 
-        emb = np.array(reps[0]["embedding"], dtype=np.float32)
-        norm = float(np.linalg.norm(emb))
-        if norm == 0 or np.isnan(norm):
-            return None
 
-        emb = emb / norm
-        return emb.tolist()
-
-    except Exception as e:
-        # Keep worker robust; return None but log a hint to server stdout
-        try:
-            print("Embedding worker error:", repr(e))
-        except Exception:
-            pass
-        return None
-
-
-_executor = None
-
-
-def get_executor():
-    global _executor
-    if _executor is None:
-        ctx = multiprocessing.get_context("spawn")
-        _executor = ProcessPoolExecutor(max_workers=1, mp_context=ctx)
-    return _executor
-
-
-def get_embedding(file_bytes):
+def _warmup_model():
+    """Pre-warms TensorFlow and Facenet512 in the background on startup."""
     try:
-        ex = get_executor()
-        fut = ex.submit(compute_embedding_worker, file_bytes)
-        return fut.result(timeout=TIMEOUT)
-
-    except TimeoutError:
-        print("Embedding timeout")
-        return None
-
-    except BrokenProcessPool:
-        global _executor
-        if _executor:
-            _executor.shutdown(wait=False, cancel_futures=True)
-        _executor = None
-        print("Worker crashed, restarted")
-        return None
-
+        from deepface import DeepFace
+        dummy = np.full((160, 160, 3), 255, dtype=np.uint8)
+        with _model_lock:
+            DeepFace.represent(img_path=dummy, model_name=MODEL, detector_backend="skip", enforce_detection=False)
+        print(f"[DeepFace] Model {MODEL} successfully pre-warmed.")
     except Exception as e:
-        print("Embedding error:", e)
-        return None
+        print("[DeepFace] Warmup notice:", repr(e))
+
+
+threading.Thread(target=_warmup_model, daemon=True).start()
 
 
 def upload_image(file_bytes):

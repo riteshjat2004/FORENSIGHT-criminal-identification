@@ -3,7 +3,10 @@ import { useSearchParams } from "react-router-dom";
 import styles from "./Members.module.css";
 
 export default function Members() {
-  const API_BASE = useMemo(() => import.meta.env.VITE_API_BASE || "http://localhost:8000", []);
+  const API_BASE = useMemo(() => {
+    const raw = import.meta.env.VITE_API_URL || import.meta.env.VITE_API_BASE || "http://localhost:8000";
+    return raw.replace(/\/+$/, "");
+  }, []);
   const [params] = useSearchParams();
 
   const name = (params.get("name") || "").trim();
