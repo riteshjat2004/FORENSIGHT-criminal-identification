@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import AssetPanel from "../components/AssetPanel.jsx";
 import CanvasArea from "../components/CanvasArea.jsx";
@@ -20,8 +20,7 @@ export default function Editor() {
 
   const [generatedImageUrl, setGeneratedImageUrl] = useState(null);
   const [gender, setGender] = useState(() => {
-    // Force an explicit choice at least once per session
-    return sessionStorage.getItem("generatedGender") ?? "";
+    return sessionStorage.getItem("generatedGender") || "Any";
   });
   const [matches, setMatches] = useState([]);
   const [matchLoading, setMatchLoading] = useState(false);
@@ -103,15 +102,12 @@ export default function Editor() {
     }
   };
 
-  const generatePreview = () => {
+  const generatePreview = useCallback(() => {
     if (elements.length === 0) {
-      showToast("Add some elements first!", "warning");
+      showToast("Add some facial elements first!", "warning");
       return;
     }
-    if (!gender) {
-      showToast("Please select a gender.", "warning");
-      return;
-    }
+    const currentGender = gender || "Any";
     const url = exportCleanImage?.() || canvasRef.current?.toDataURL("image/png");
     if (!url) return;
     setGeneratedImageUrl(url);
@@ -120,18 +116,36 @@ export default function Editor() {
 
     try {
       sessionStorage.setItem("generatedImageUrl", url);
-      sessionStorage.setItem("generatedGender", gender);
+      sessionStorage.setItem("generatedGender", currentGender);
     } catch {
-      // ignore storage failures
+      // ignore storage quota failures
     }
 
-    navigate("/results", { state: { generatedImageUrl: url, gender } });
-  };
+    navigate("/results", {
+      state: {
+        generatedImageUrl: url,
+        gender: currentGender,
+        searchTimestamp: Date.now(),
+      },
+    });
+  }, [elements.length, gender, exportCleanImage, canvasRef, showToast, navigate]);
+
+  // Listen to header "Generate Image" button click when already on this editor page
+  useEffect(() => {
+    const handleHeaderGenerate = () => {
+      generatePreview();
+    };
+    window.addEventListener("forensight:generate-canvas", handleHeaderGenerate);
+    return () => {
+      window.removeEventListener("forensight:generate-canvas", handleHeaderGenerate);
+    };
+  }, [generatePreview]);
 
   const onGenderChange = (nextGender) => {
-    setGender(nextGender);
+    const val = nextGender || "Any";
+    setGender(val);
     try {
-      sessionStorage.setItem("generatedGender", nextGender);
+      sessionStorage.setItem("generatedGender", val);
     } catch {
       // ignore storage failures
     }

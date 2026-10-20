@@ -39,21 +39,19 @@ export default function CanvasArea({
   {/* Row 1 → Gender */}
  <div className={`${styles.row}`} >
 
-    <button className={styles.btn}  style={{ height: "50px" }}>
-      <label className={styles.genderLabel} >Gender :{"   "} </label>
+    <div className={styles.btn} style={{ height: "50px", display: "flex", alignItems: "center", justifyContent: "center" }}>
+      <label className={styles.genderLabel}>Gender: </label>
       <select
-        className={styles.genderSelect  }
+        className={styles.genderSelect}
         value={gender}
         onChange={(e) => onGenderChange?.(e.target.value)}
-        
       >
         <option value="Any">Any</option>
         <option value="Male">Male</option>
         <option value="Female">Female</option>
         <option value="Other">Other</option>
-        
       </select>
-    </button>
+    </div>
 
     <button className={styles.btn} type="button" onClick={onDownload}  style={{ height: "50px" }}>
       Download

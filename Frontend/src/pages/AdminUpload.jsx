@@ -37,6 +37,11 @@ export default function AdminUpload() {
     formData.append("image", file);
 
     const token = localStorage.getItem("token");
+    if (!token) {
+      alert("Please login as Admin first");
+      window.location.href = "/login";
+      return;
+    }
 
     try {
       setLoading(true);
@@ -47,11 +52,22 @@ export default function AdminUpload() {
         body: formData,
       });
 
-      const data = await res.json();
+      let data = {};
+      try {
+        data = await res.json();
+      } catch {
+        data = {};
+      }
 
-      if (!res.ok) return alert(data.message);
+      if (!res.ok) {
+        if (res.status === 401 || res.status === 403) {
+          alert(data.message || "Admin authorization expired or denied");
+          return;
+        }
+        return alert(data.message || `Upload failed (HTTP ${res.status})`);
+      }
 
-      alert("✅ Criminal Added");
+      alert("✅ Criminal Record Added Successfully");
 
       setForm({
         name: "",
@@ -67,7 +83,7 @@ export default function AdminUpload() {
       setFile(null);
       setPreview(null);
     } catch {
-      alert("Upload failed");
+      alert("Upload failed. Could not reach server.");
     } finally {
       setLoading(false);
     }
@@ -87,7 +103,7 @@ export default function AdminUpload() {
         </div>
 
         <div className={styles.rightPanel}>
-          <h2 className={styles.title}>🚨 Add Criminal</h2>
+          <h2 className={styles.title}>🚨 Add Criminal Record</h2>
 
           <div className={styles.grid}>
             <input className={styles.input} placeholder="Name" value={form.name} onChange={(e) => handleChange("name", e.target.value)} />
@@ -97,6 +113,7 @@ export default function AdminUpload() {
               <option value="">Gender</option>
               <option>Male</option>
               <option>Female</option>
+              <option>Other</option>
             </select>
 
             <input className={styles.input} placeholder="Address" value={form.address} onChange={(e) => handleChange("address", e.target.value)} />
@@ -109,6 +126,7 @@ export default function AdminUpload() {
 
           <div className={styles.status}>
             <button
+              type="button"
               className={form.status === "ARRESTED" ? styles.activeBtn : styles.btn}
               onClick={() => handleChange("status", "ARRESTED")}
             >
@@ -116,6 +134,7 @@ export default function AdminUpload() {
             </button>
 
             <button
+              type="button"
               className={form.status === "NOT ARRESTED" ? styles.activeBtn : styles.btn}
               onClick={() => handleChange("status", "NOT ARRESTED")}
             >
@@ -126,17 +145,16 @@ export default function AdminUpload() {
           <input
             className={styles.fileInput}
             type="file"
-            accept=".jpg,.png"
+            accept=".jpg,.jpeg,.png"
             onChange={(e) => {
               const f = e.target.files[0];
               if (!f) return;
-              document.documentElement.requestFullscreen().catch(console.error);
               setFile(f);
               setPreview(URL.createObjectURL(f));
             }}
           />
 
-          <button className={styles.submit} onClick={handleUpload}>
+          <button className={styles.submit} type="button" onClick={handleUpload} disabled={loading}>
             {loading ? "Adding..." : "➕ Add Criminal"}
           </button>
         </div>

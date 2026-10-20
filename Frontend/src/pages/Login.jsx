@@ -45,7 +45,7 @@ export default function Login() {
         localStorage.setItem("role", data.user?.role || "NORMAL");
         window.dispatchEvent(new Event("authchange"));
 
-        document.documentElement.requestFullscreen().catch(console.error);
+        
 
         navigate("/");
       } else {

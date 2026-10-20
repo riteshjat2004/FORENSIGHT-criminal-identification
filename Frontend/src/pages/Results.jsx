@@ -1,15 +1,19 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useLocation } from "react-router-dom";
 import styles from "./Results.module.css";
 
 function dataUrlToFile(dataUrl, filename) {
-  const [meta, b64] = dataUrl.split(",");
-  const mime = meta.match(/data:(.*);base64/)?.[1] || "image/png";
-  const bin = atob(b64);
-  const buf = new Uint8Array(bin.length);
-  for (let i = 0; i < bin.length; i++) buf[i] = bin.charCodeAt(i);
-  const blob = new Blob([buf], { type: mime });
-  return new File([blob], filename, { type: mime });
+  try {
+    const [meta, b64] = dataUrl.split(",");
+    const mime = meta.match(/data:(.*);base64/)?.[1] || "image/png";
+    const bin = atob(b64);
+    const buf = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) buf[i] = bin.charCodeAt(i);
+    const blob = new Blob([buf], { type: mime });
+    return new File([blob], filename, { type: mime });
+  } catch {
+    return new File([], filename, { type: "image/jpeg" });
+  }
 }
 
 async function prepareOptimizedImageFile(dataUrl, filename) {
@@ -29,10 +33,15 @@ async function prepareOptimizedImageFile(dataUrl, filename) {
           }
         }
         const canvas = document.createElement("canvas");
-        canvas.width = width;
-        canvas.height = height;
+        canvas.width = Math.max(1, width);
+        canvas.height = Math.max(1, height);
         const ctx = canvas.getContext("2d");
+
+        // Fill clean white background so transparent PNGs/sketches never turn pitch black in JPEG
+        ctx.fillStyle = "#ffffff";
+        ctx.fillRect(0, 0, width, height);
         ctx.drawImage(img, 0, 0, width, height);
+
         canvas.toBlob(
           (blob) => {
             if (blob) {
@@ -74,30 +83,39 @@ export default function Results() {
 
   const [loading, setLoading] = useState(false);
   const [matches, setMatches] = useState([]);
-  const [autoSearched, setAutoSearched] = useState(false);
+  const lastSearchKeyRef = useRef(null);
 
   useEffect(() => {
     if (location.state?.generatedImageUrl) {
-      sessionStorage.setItem("generatedImageUrl", location.state.generatedImageUrl);
+      try {
+        sessionStorage.setItem("generatedImageUrl", location.state.generatedImageUrl);
+      } catch (err) {
+        console.warn("sessionStorage quota exceeded:", err);
+      }
       setGeneratedImageUrl(location.state.generatedImageUrl);
     }
     if (location.state?.gender) {
-      sessionStorage.setItem("generatedGender", location.state.gender);
+      try {
+        sessionStorage.setItem("generatedGender", location.state.gender);
+      } catch (err) {
+        console.warn("sessionStorage quota exceeded:", err);
+      }
       setGender(location.state.gender);
     }
   }, [location.state]);
 
   const runSearch = useCallback(
-    async (e) => {
-      e?.preventDefault?.();
+    async (overrideImgUrl) => {
+      const activeUrl = overrideImgUrl || generatedImageUrl;
 
       const token = localStorage.getItem("token");
       if (!token) {
         alert("Please login first");
+        window.location.href = "/login";
         return;
       }
 
-      if (!generatedImageUrl) {
+      if (!activeUrl) {
         alert("Please generate or select an image first");
         return;
       }
@@ -106,7 +124,7 @@ export default function Results() {
 
       try {
         const imageFile = await prepareOptimizedImageFile(
-          generatedImageUrl,
+          activeUrl,
           `search-${Date.now()}.jpg`
         );
 
@@ -136,6 +154,14 @@ export default function Results() {
         }
 
         if (!res.ok) {
+          if (res.status === 401) {
+            alert("Your session has expired. Please login again.");
+            localStorage.removeItem("token");
+            localStorage.removeItem("role");
+            window.dispatchEvent(new Event("authchange"));
+            window.location.href = "/login";
+            return;
+          }
           alert(data.error || data.message || `Search failed (HTTP ${res.status})`);
           setMatches([]);
           return;
@@ -158,24 +184,30 @@ export default function Results() {
     [generatedImageUrl, gender, API_BASE],
   );
 
+  // Automatically trigger search when a new search state arrives (including timestamp from header)
   useEffect(() => {
-    if (!autoSearched && generatedImageUrl) {
-      setAutoSearched(true);
-      runSearch();
+    const currentTargetUrl = location.state?.generatedImageUrl || generatedImageUrl;
+    const currentSearchKey = location.state?.searchTimestamp
+      ? `${currentTargetUrl}-${location.state.searchTimestamp}`
+      : currentTargetUrl;
+
+    if (currentTargetUrl && currentSearchKey !== lastSearchKeyRef.current) {
+      lastSearchKeyRef.current = currentSearchKey;
+      runSearch(currentTargetUrl);
     }
-  }, [autoSearched, generatedImageUrl, runSearch]);
+  }, [location.state, generatedImageUrl, runSearch]);
 
   return (
     <div className={styles.page}>
       <div className={styles.layout}>
         <section className={styles.left}>
           <div className={styles.card}>
-            <h2 className={styles.cardTitle}>Generated Image</h2>
+            <h2 className={styles.cardTitle}>Query Face Image</h2>
 
             {generatedImageUrl ? (
-              <img className={styles.generatedImg} src={generatedImageUrl} alt="Generated" />
+              <img className={styles.generatedImg} src={generatedImageUrl} alt="Query Face" />
             ) : (
-              <p className={styles.muted}>No generated image yet.</p>
+              <p className={styles.muted}>No face image selected yet. Use &ldquo;Search Image&rdquo; above or generate one in the editor.</p>
             )}
           </div>
         </section>
@@ -184,7 +216,7 @@ export default function Results() {
           <div className={styles.card}>
             <h2 className={styles.cardTitle}>Matched Faces</h2>
 
-            <form className={styles.searchForm} onSubmit={runSearch}>
+            <form className={styles.searchForm} onSubmit={(e) => { e.preventDefault(); runSearch(); }}>
               <button className={styles.primaryBtn} type="submit" disabled={loading}>
                 {loading ? "Searching..." : "Search"}
               </button>
@@ -192,42 +224,42 @@ export default function Results() {
 
             <div className={styles.resultsScroll}>
               {matches.length > 0 ? (
-               <div className={styles.resultsGrid}>
-  {matches.slice(0, 12).map((m, i) => (
-    <div
-      key={`${m.name}-${i}`}
-      className={i === 0 ? styles.resultCardBest : styles.resultCard}
-    >
-      {m.imageURL && (
-        <div className={styles.imgWrapper}>
-          <img
-            className={styles.resultImg}
-            src={m.imageURL}
-            alt={m.name || "match"}
-          />
-        </div>
-      )}
+                <div className={styles.resultsGrid}>
+                  {matches.slice(0, 12).map((m, i) => (
+                    <div
+                      key={`${m.name}-${i}`}
+                      className={i === 0 ? styles.resultCardBest : styles.resultCard}
+                    >
+                      {m.imageURL && (
+                        <div className={styles.imgWrapper}>
+                          <img
+                            className={styles.resultImg}
+                            src={m.imageURL}
+                            alt={m.name || "match"}
+                          />
+                        </div>
+                      )}
 
-      <p className={styles.matchLine}>
-        Match:{" "}
-        {typeof m.score === "number"
-          ? `${(m.score * 100).toFixed(1)}%`
-          : "-"}
-      </p>
+                      <p className={styles.matchLine}>
+                        Match:{" "}
+                        {typeof m.score === "number"
+                          ? `${(m.score * 100).toFixed(1)}%`
+                          : "-"}
+                      </p>
 
-      <p className={styles.nameLine}>{m.name}</p>
+                      <p className={styles.nameLine}>{m.name}</p>
 
-      {m.age != null && <p className={styles.metaLine}>Age: {m.age}</p>}
-      {m.sex && <p className={styles.metaLine}>Sex: {m.sex}</p>}
-      {m.crime && <p className={styles.metaLine}>Crime: {m.crime}</p>}
-      {m.status && <p className={styles.metaLine}>Status: {m.status}</p>}
-    </div>
-  ))}
-</div>
+                      {m.age != null && <p className={styles.metaLine}>Age: {m.age}</p>}
+                      {m.sex && <p className={styles.metaLine}>Sex: {m.sex}</p>}
+                      {m.crime && <p className={styles.metaLine}>Crime: {m.crime}</p>}
+                      {m.status && <p className={styles.metaLine}>Status: {m.status}</p>}
+                    </div>
+                  ))}
+                </div>
               ) : (
                 !loading && (
                   <p className={styles.muted}>
-                    {generatedImageUrl ? "No matches yet." : "Generate an image to search."}
+                    {generatedImageUrl ? "No matches found above threshold." : "Generate or search an image to find matches."}
                   </p>
                 )
               )}
