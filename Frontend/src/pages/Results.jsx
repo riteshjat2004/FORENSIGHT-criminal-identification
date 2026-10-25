@@ -83,7 +83,16 @@ export default function Results() {
 
   const [loading, setLoading] = useState(false);
   const [matches, setMatches] = useState([]);
+  const [hasStrongMatches, setHasStrongMatches] = useState(true);
+  const [searchError, setSearchError] = useState(null);
+  const [progressText, setProgressText] = useState("");
+  const [progressHelp, setProgressHelp] = useState("");
   const lastSearchKeyRef = useRef(null);
+
+  // Pre-warm backend immediately on component mount (helps wake up Render free tier early)
+  useEffect(() => {
+    fetch(`${API_BASE}/api/health`, { method: "GET" }).catch(() => {});
+  }, [API_BASE]);
 
   useEffect(() => {
     if (location.state?.generatedImageUrl) {
@@ -110,17 +119,38 @@ export default function Results() {
 
       const token = localStorage.getItem("token");
       if (!token) {
-        alert("Please login first");
-        window.location.href = "/login";
+        setSearchError("Please log in first to perform a face search.");
         return;
       }
 
       if (!activeUrl) {
-        alert("Please generate or select an image first");
+        setSearchError("Please select or generate a face image first.");
         return;
       }
 
       setLoading(true);
+      setSearchError(null);
+      setProgressText("Initializing face recognition...");
+      setProgressHelp("Preparing image and checking server connection...");
+
+      // Update progress messages every few seconds to reassure the user
+      let elapsedSeconds = 0;
+      const progressTimer = setInterval(() => {
+        elapsedSeconds += 2;
+        if (elapsedSeconds < 8) {
+          setProgressText("Analyzing facial features...");
+          setProgressHelp("Optimizing face boundaries and landmarks...");
+        } else if (elapsedSeconds < 30) {
+          setProgressText("Extracting 512-dimension face embeddings...");
+          setProgressHelp("Computing biometric facial vector...");
+        } else if (elapsedSeconds < 65) {
+          setProgressText("Cloud recognition engine waking up...");
+          setProgressHelp("The free-tier server is spinning up from sleep mode (typically takes ~45–60 seconds). Please hold on...");
+        } else {
+          setProgressText("Comparing against criminal records database...");
+          setProgressHelp("Performing vectorized cosine matching across database profiles...");
+        }
+      }, 2000);
 
       try {
         const imageFile = await prepareOptimizedImageFile(
@@ -132,8 +162,9 @@ export default function Results() {
         formData.append("image", imageFile);
         if (gender && gender !== "Any") formData.append("sex_filter", gender);
 
+        // 120-second timeout to easily accommodate cloud cold starts
         const controller = new AbortController();
-        const timeoutId = setTimeout(() => controller.abort(), 45000);
+        const timeoutId = setTimeout(() => controller.abort(), 120000);
 
         const res = await fetch(`${API_BASE}/api/upload`, {
           method: "POST",
@@ -145,6 +176,7 @@ export default function Results() {
         });
 
         clearTimeout(timeoutId);
+        clearInterval(progressTimer);
 
         let data = {};
         try {
@@ -155,29 +187,41 @@ export default function Results() {
 
         if (!res.ok) {
           if (res.status === 401) {
-            alert("Your session has expired. Please login again.");
             localStorage.removeItem("token");
             localStorage.removeItem("role");
             window.dispatchEvent(new Event("authchange"));
-            window.location.href = "/login";
+            setSearchError("Your session has expired. Please login again.");
+            setTimeout(() => {
+              window.location.href = "/login";
+            }, 1800);
             return;
           }
-          alert(data.error || data.message || `Search failed (HTTP ${res.status})`);
+
+          const msg = data.error || data.message || `Search failed with status ${res.status}`;
+          setSearchError(msg);
           setMatches([]);
           return;
         }
 
         const sorted = (data.matches || []).sort((a, b) => b.score - a.score);
         setMatches(sorted);
+        setHasStrongMatches(data.hasStrongMatches !== false);
+        setSearchError(null);
       } catch (err) {
+        clearInterval(progressTimer);
         console.error("Search request error:", err);
         if (err.name === "AbortError") {
-          alert("Search timed out. The server is busy, please try again in a moment.");
+          setSearchError(
+            "Search timed out after 2 minutes. The cloud server may still be spinning up from sleep mode. Please click Retry below to try again."
+          );
         } else {
-          alert(err?.message || "Server error: could not connect to server");
+          setSearchError(
+            err?.message || "Could not connect to the recognition server. Please verify your connection."
+          );
         }
         setMatches([]);
       } finally {
+        clearInterval(progressTimer);
         setLoading(false);
       }
     },
@@ -222,13 +266,45 @@ export default function Results() {
               </button>
             </form>
 
+            {loading && (
+              <div className={styles.statusContainer}>
+                <div className={styles.statusHeader}>
+                  <div className={styles.spinner} />
+                  <span>{progressText}</span>
+                </div>
+                {progressHelp && <p className={styles.statusHelp}>{progressHelp}</p>}
+              </div>
+            )}
+
+            {searchError && (
+              <div className={styles.errorBanner}>
+                <div className={styles.errorTitle}>
+                  <span>⚠️ Search Notice</span>
+                </div>
+                <p className={styles.errorMessage}>{searchError}</p>
+                <button
+                  type="button"
+                  className={styles.retryBtn}
+                  onClick={() => runSearch()}
+                >
+                  🔄 Retry Search
+                </button>
+              </div>
+            )}
+
+            {!loading && !searchError && matches.length > 0 && !hasStrongMatches && (
+              <div className={styles.noticeBadge}>
+                ℹ️ Showing closest facial profiles in the database (similarity is below the 30% confidence threshold).
+              </div>
+            )}
+
             <div className={styles.resultsScroll}>
               {matches.length > 0 ? (
                 <div className={styles.resultsGrid}>
                   {matches.slice(0, 12).map((m, i) => (
                     <div
                       key={`${m.name}-${i}`}
-                      className={i === 0 ? styles.resultCardBest : styles.resultCard}
+                      className={i === 0 && hasStrongMatches ? styles.resultCardBest : styles.resultCard}
                     >
                       {m.imageURL && (
                         <div className={styles.imgWrapper}>
@@ -257,7 +333,7 @@ export default function Results() {
                   ))}
                 </div>
               ) : (
-                !loading && (
+                !loading && !searchError && (
                   <p className={styles.muted}>
                     {generatedImageUrl ? "No matches found above threshold." : "Generate or search an image to find matches."}
                   </p>

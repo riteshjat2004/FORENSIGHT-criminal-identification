@@ -1,5 +1,16 @@
-import io
 import os
+# Configure TensorFlow, OpenBLAS, and MKL thread limits BEFORE any other imports
+# Prevents spawning 64+ threads on cloud hosts (Render/AWS), which causes 512MB RAM OOM crashes.
+os.environ["TF_CPP_MIN_LOG_LEVEL"] = "3"
+os.environ["TF_NUM_INTRAOP_THREADS"] = "1"
+os.environ["TF_NUM_INTEROP_THREADS"] = "1"
+os.environ["OMP_NUM_THREADS"] = "1"
+os.environ["OPENBLAS_NUM_THREADS"] = "1"
+os.environ["MKL_NUM_THREADS"] = "1"
+os.environ["VECLIB_MAXIMUM_THREADS"] = "1"
+os.environ["NUMEXPR_NUM_THREADS"] = "1"
+
+import io
 import numpy as np
 from datetime import datetime, timezone
 import multiprocessing
@@ -185,88 +196,98 @@ def file_to_numpy(file_bytes):
 
 
 _model_lock = threading.Lock()
+_model_ready = False
+_model_warmup_error = None
 
 
-def get_embedding(file_bytes):
+def get_embedding(file_bytes, timeout_seconds=90):
     """
     Extracts a 512-d normalized embedding vector using DeepFace with cascading fallbacks:
-    1. Fast built-in OpenCV Haar Cascade detector (<5ms, ~10MB RAM).
-    2. Configured secondary detector (if different from opencv).
-    3. Skip detector (direct input resize, ideal for sketches, composites, drawings).
-    Uses a thread lock to ensure safe model inference across Gunicorn threads without
-    spawning memory-heavy subprocesses.
+    1. Primary detector with enforce_detection=True (detects actual face boundaries and facial features).
+    2. Fallback to skip detector (uses the pre-scaled image directly, ideal for sketches, composites, and pre-cropped photos).
+    Uses a bounded lock acquisition to prevent Gunicorn thread deadlocks.
     """
-    with _model_lock:
-        try:
-            from deepface import DeepFace
+    acquired = _model_lock.acquire(timeout=timeout_seconds)
+    if not acquired:
+        print("[DeepFace] Warning: Lock acquisition timed out waiting for prior inference.")
+        return None
 
-            img = file_to_numpy(file_bytes)
+    try:
+        from deepface import DeepFace
+
+        img = file_to_numpy(file_bytes)
+        reps = None
+
+        # 1. Primary detector (opencv or configured detector) with enforce_detection=True
+        # When enforce_detection=True, if no face is found it raises an exception and cleanly falls back.
+        detector_backend = DETECTOR if DETECTOR and DETECTOR != "skip" else "opencv"
+        try:
+            reps = DeepFace.represent(
+                img_path=img,
+                model_name=MODEL,
+                detector_backend=detector_backend,
+                enforce_detection=True,
+            )
+        except Exception as e:
+            # Face not detected by primary detector
             reps = None
 
-            # 1. Primary fast detector: opencv
+        # 2. Secondary fallback detector if primary was not opencv
+        if not reps and detector_backend != "opencv":
             try:
                 reps = DeepFace.represent(
                     img_path=img,
                     model_name=MODEL,
                     detector_backend="opencv",
+                    enforce_detection=True,
+                )
+            except Exception:
+                reps = None
+
+        # 3. Third fallback: skip detector (handles composite sketches, drawings, and cropped face photos)
+        if not reps:
+            try:
+                reps = DeepFace.represent(
+                    img_path=img,
+                    model_name=MODEL,
+                    detector_backend="skip",
                     enforce_detection=False,
                 )
             except Exception as e:
-                print("DeepFace opencv detector failed:", repr(e))
+                print("DeepFace skip detector fallback error:", repr(e))
                 reps = None
 
-            # 2. Secondary detector if configured and different from opencv
-            if not reps and DETECTOR != "opencv":
-                try:
-                    reps = DeepFace.represent(
-                        img_path=img,
-                        model_name=MODEL,
-                        detector_backend=DETECTOR,
-                        enforce_detection=False,
-                    )
-                except Exception as e:
-                    print(f"DeepFace {DETECTOR} detector failed:", repr(e))
-                    reps = None
-
-            # 3. Third fallback: skip detector (handles composite sketches, drawings, and cropped faces)
-            if not reps:
-                try:
-                    reps = DeepFace.represent(
-                        img_path=img,
-                        model_name=MODEL,
-                        detector_backend="skip",
-                        enforce_detection=False,
-                    )
-                except Exception as e:
-                    print("DeepFace skip detector failed:", repr(e))
-                    reps = None
-
-            if not reps:
-                print("DeepFace returned no representations")
-                return None
-
-            emb = np.array(reps[0]["embedding"], dtype=np.float32)
-            norm = float(np.linalg.norm(emb))
-            if norm == 0 or np.isnan(norm):
-                return None
-
-            emb = emb / norm
-            return emb.tolist()
-
-        except Exception as e:
-            print("Embedding extraction error:", repr(e))
+        if not reps or len(reps) == 0:
+            print("[DeepFace] No representation extracted from image")
             return None
+
+        emb = np.array(reps[0]["embedding"], dtype=np.float32)
+        norm = float(np.linalg.norm(emb))
+        if norm == 0 or np.isnan(norm):
+            return None
+
+        emb = emb / norm
+        return emb.tolist()
+
+    except Exception as e:
+        print("Embedding extraction error:", repr(e))
+        return None
+    finally:
+        _model_lock.release()
 
 
 def _warmup_model():
-    """Pre-warms TensorFlow and Facenet512 in the background on startup."""
+    """Pre-warms TensorFlow and Facenet512 on worker startup."""
+    global _model_ready, _model_warmup_error
     try:
         from deepface import DeepFace
         dummy = np.full((160, 160, 3), 255, dtype=np.uint8)
         with _model_lock:
             DeepFace.represent(img_path=dummy, model_name=MODEL, detector_backend="skip", enforce_detection=False)
-        print(f"[DeepFace] Model {MODEL} successfully pre-warmed.")
+        _model_ready = True
+        print(f"[DeepFace] Model {MODEL} successfully pre-warmed and ready.")
     except Exception as e:
+        _model_warmup_error = str(e)
         print("[DeepFace] Warmup notice:", repr(e))
 
 
@@ -368,12 +389,15 @@ def api_upload_and_match():
         return jsonify({"error": "Please select an image"}), 400
 
     file_bytes = file.read()
+    if not file_bytes:
+        return jsonify({"error": "Uploaded image file is empty"}), 400
+
     query_emb = get_embedding(file_bytes)
     if query_emb is None:
         return (
             jsonify(
                 {
-                    "error": "Could not detect a face in the uploaded image. Please use a clear, front-facing face image."
+                    "error": "Could not detect face features in the uploaded image. Please ensure the image shows a visible face, or try generating a clearer sketch."
                 }
             ),
             400,
@@ -399,6 +423,7 @@ def api_upload_and_match():
     valid_docs = [d for d in docs if "embedding" in d and len(d["embedding"]) == 512]
 
     results = []
+    top_candidates = []
     if valid_docs:
         q_vec = np.array(query_emb, dtype=np.float32)
         db_matrix = np.array([d["embedding"] for d in valid_docs], dtype=np.float32)
@@ -408,21 +433,31 @@ def api_upload_and_match():
 
         for doc, score in zip(valid_docs, scores):
             sc = float(score)
+            item = {
+                "name": doc.get("name"),
+                "age": doc.get("age"),
+                "sex": doc.get("sex"),
+                "crime": doc.get("crime"),
+                "status": doc.get("status"),
+                "imageURL": doc.get("imageURL"),
+                "score": sc,
+            }
+            top_candidates.append(item)
             if sc >= THRESHOLD:
-                results.append(
-                    {
-                        "name": doc.get("name"),
-                        "age": doc.get("age"),
-                        "sex": doc.get("sex"),
-                        "crime": doc.get("crime"),
-                        "status": doc.get("status"),
-                        "imageURL": doc.get("imageURL"),
-                        "score": sc,
-                    }
-                )
+                results.append(item)
 
     results.sort(key=lambda x: x["score"], reverse=True)
-    return jsonify({"matches": results[:6]}), 200
+    top_candidates.sort(key=lambda x: x["score"], reverse=True)
+
+    has_strong_matches = len(results) > 0
+    final_matches = results[:6] if has_strong_matches else top_candidates[:3]
+
+    return jsonify({
+        "matches": final_matches,
+        "hasStrongMatches": has_strong_matches,
+        "threshold": THRESHOLD,
+        "totalCompared": len(valid_docs)
+    }), 200
 
 
 @app.route("/api/enroll", methods=["POST", "OPTIONS"])
@@ -561,6 +596,8 @@ def health_check():
     return jsonify({
         "status": "healthy",
         "service": "FORENSIGHT Face Recognition API",
+        "model": MODEL,
+        "modelReady": _model_ready,
         "timestamp": datetime.now(timezone.utc).isoformat()
     }), 200
 

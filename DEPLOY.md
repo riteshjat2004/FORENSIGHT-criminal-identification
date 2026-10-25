@@ -71,11 +71,11 @@ If you prefer setting up the web service manually:
    - **Runtime**: `Python 3` (or choose `Docker` to build from `Backend/Dockerfile`)
    - **Build Command**:
      ```bash
-     python -m pip install --upgrade pip setuptools wheel && pip install -r requirements.txt
+     python -m pip install --upgrade pip setuptools wheel && pip install -r requirements.txt && python -c "from deepface import DeepFace; import numpy as np; DeepFace.represent(img_path=np.full((160,160,3),255,dtype=np.uint8), model_name='Facenet512', detector_backend='skip', enforce_detection=False)"
      ```
    - **Start Command**:
      ```bash
-     gunicorn app:app -b 0.0.0.0:$PORT -w 1 --threads 4 --timeout 180
+     gunicorn app:app -b 0.0.0.0:$PORT -w 1 --threads 2 --timeout 180
      ```
    - **Plan**: `Starter` (recommended for DeepFace/TensorFlow models; free tier works with 1 worker).
 4. Under **Advanced** $\rightarrow$ **Health Check Path**: set `/api/health`.

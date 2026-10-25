@@ -72,6 +72,9 @@ export default function Editor() {
     const formData = new FormData();
     formData.append("image", file);
 
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 120000);
+
     try {
       setMatchLoading(true);
       const res = await fetch(`${API_BASE}/api/upload`, {
@@ -80,7 +83,10 @@ export default function Editor() {
           Authorization: `Bearer ${token}`,
         },
         body: formData,
+        signal: controller.signal,
       });
+
+      clearTimeout(timeoutId);
 
       const data = await res.json();
       if (!res.ok) {
@@ -92,12 +98,17 @@ export default function Editor() {
       setMatches(sorted);
       setSearchAttempted(true);
       showToast(
-        sorted.length ? `Found ${sorted.length} match(es)` : "No matches",
+        sorted.length ? `Found ${sorted.length} match(es)` : "No matches found",
         sorted.length ? "success" : "info",
       );
-    } catch {
-      showToast("Server error", "warning");
+    } catch (err) {
+      if (err.name === "AbortError") {
+        showToast("Search timed out. The server is spinning up, please retry in a moment.", "warning");
+      } else {
+        showToast("Server error: could not connect to recognition server", "warning");
+      }
     } finally {
+      clearTimeout(timeoutId);
       setMatchLoading(false);
     }
   };

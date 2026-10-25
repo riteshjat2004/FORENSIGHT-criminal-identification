@@ -123,6 +123,11 @@ export default function AppHeader() {
       navigate("/login");
       return;
     }
+    // Pre-warm backend in background while the user selects an image from their disk
+    try {
+      const raw = import.meta.env.VITE_API_URL || import.meta.env.VITE_API_BASE || "http://localhost:8000";
+      fetch(`${raw.replace(/\/+$/, "")}/api/health`, { method: "GET" }).catch(() => {});
+    } catch {}
     uploadMatchRef.current?.click?.();
   };
 
