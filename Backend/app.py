@@ -27,6 +27,11 @@ from werkzeug.security import generate_password_hash, check_password_hash
 from itsdangerous import URLSafeTimedSerializer, BadSignature, SignatureExpired
 import cloudinary
 import cloudinary.uploader
+try:
+    from deepface import DeepFace
+except Exception as _deepface_import_err:
+    print("[DeepFace] Initial top-level import notice:", repr(_deepface_import_err))
+    DeepFace = None
 
 # ==============================
 # LOAD ENV
@@ -236,7 +241,9 @@ def get_embedding(file_bytes, timeout_seconds=90):
             img_to_save.save(tmp, format="JPEG", quality=95)
             tmp_path = tmp.name
 
-        from deepface import DeepFace
+        global DeepFace
+        if DeepFace is None:
+            from deepface import DeepFace
 
         reps = None
         detector_backend = DETECTOR if DETECTOR and DETECTOR != "skip" else "opencv"
@@ -307,10 +314,12 @@ def get_embedding(file_bytes, timeout_seconds=90):
 
 def _warmup_model():
     """Pre-warms TensorFlow and Facenet512 on worker startup using a temp file."""
-    global _model_ready, _model_warmup_error
+    global _model_ready, _model_warmup_error, DeepFace
     tmp_warmup = None
     try:
-        from deepface import DeepFace
+        if DeepFace is None:
+            from deepface import DeepFace
+
         dummy_img = Image.new("RGB", (160, 160), color=(200, 200, 200))
         with tempfile.NamedTemporaryFile(suffix=".jpg", delete=False) as tmp:
             dummy_img.save(tmp, format="JPEG")
