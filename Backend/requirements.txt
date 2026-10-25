@@ -8,17 +8,13 @@ python-dotenv==1.2.2
 pymongo==4.17.0
 cloudinary==1.44.2
 
-numpy>=1.24.3
+numpy>=1.24.3,<2.0.0
 pillow>=10.0.0
 
 opencv-python-headless>=4.8.0
 deepface>=0.0.90
-retina-face>=0.0.17
-mtcnn>=1.0.0
 
-tensorflow-cpu>=2.15.0
+tensorflow-cpu>=2.15.0,<2.17.0
 tf-keras>=2.16.0
-keras>=2.15.0
 
-mediapipe>=0.10.14
 requests>=2.31.0

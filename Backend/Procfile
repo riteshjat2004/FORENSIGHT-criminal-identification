@@ -1,1 +1,1 @@
-web: gunicorn app:app -b 0.0.0.0:$PORT -w 1 --threads 2 --timeout 180
+web: MALLOC_ARENA_MAX=2 gunicorn app:app -b 0.0.0.0:$PORT -w 1 --threads 1 --timeout 180

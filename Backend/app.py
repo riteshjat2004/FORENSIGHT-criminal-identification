@@ -1,6 +1,7 @@
 import os
-# Configure TensorFlow, OpenBLAS, and MKL thread limits BEFORE any other imports
+# Configure TensorFlow, OpenBLAS, MKL thread limits and glibc memory arenas BEFORE any other imports
 # Prevents spawning 64+ threads on cloud hosts (Render/AWS), which causes 512MB RAM OOM crashes.
+os.environ["MALLOC_ARENA_MAX"] = "2"
 os.environ["TF_CPP_MIN_LOG_LEVEL"] = "3"
 os.environ["TF_USE_LEGACY_KERAS"] = "1"
 os.environ["TF_NUM_INTRAOP_THREADS"] = "1"
@@ -12,6 +13,7 @@ os.environ["VECLIB_MAXIMUM_THREADS"] = "1"
 os.environ["NUMEXPR_NUM_THREADS"] = "1"
 
 import io
+import gc
 import tempfile
 import numpy as np
 from datetime import datetime, timezone
@@ -310,6 +312,7 @@ def get_embedding(file_bytes, timeout_seconds=90):
                     os.remove(tmp_path)
             except Exception:
                 pass
+        gc.collect()
         _model_lock.release()
 
 
