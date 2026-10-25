@@ -2,6 +2,7 @@ import os
 # Configure TensorFlow, OpenBLAS, and MKL thread limits BEFORE any other imports
 # Prevents spawning 64+ threads on cloud hosts (Render/AWS), which causes 512MB RAM OOM crashes.
 os.environ["TF_CPP_MIN_LOG_LEVEL"] = "3"
+os.environ["TF_USE_LEGACY_KERAS"] = "1"
 os.environ["TF_NUM_INTRAOP_THREADS"] = "1"
 os.environ["TF_NUM_INTEROP_THREADS"] = "1"
 os.environ["OMP_NUM_THREADS"] = "1"

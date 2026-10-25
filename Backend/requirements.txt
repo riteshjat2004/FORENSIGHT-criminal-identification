@@ -17,6 +17,7 @@ retina-face>=0.0.17
 mtcnn>=1.0.0
 
 tensorflow-cpu>=2.15.0
+tf-keras>=2.16.0
 keras>=2.15.0
 
 mediapipe>=0.10.14
