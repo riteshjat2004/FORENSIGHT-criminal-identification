@@ -11,6 +11,7 @@ os.environ["VECLIB_MAXIMUM_THREADS"] = "1"
 os.environ["NUMEXPR_NUM_THREADS"] = "1"
 
 import io
+import tempfile
 import numpy as np
 from datetime import datetime, timezone
 import multiprocessing
@@ -206,89 +207,134 @@ def get_embedding(file_bytes, timeout_seconds=90):
     1. Primary detector with enforce_detection=True (detects actual face boundaries and facial features).
     2. Fallback to skip detector (uses the pre-scaled image directly, ideal for sketches, composites, and pre-cropped photos).
     Uses a bounded lock acquisition to prevent Gunicorn thread deadlocks.
+    Writes incoming bytes to a temporary .jpg file on disk because DeepFace requires a file path string.
     """
     acquired = _model_lock.acquire(timeout=timeout_seconds)
     if not acquired:
         print("[DeepFace] Warning: Lock acquisition timed out waiting for prior inference.")
-        return None
+        return None, "Server inference lock busy"
 
+    tmp_path = None
     try:
+        # Pre-scale image if needed and write clean JPEG to disk
+        img = Image.open(io.BytesIO(file_bytes))
+        MAX_DIM = 640
+        if max(img.size) > MAX_DIM:
+            img.thumbnail((MAX_DIM, MAX_DIM), Image.Resampling.LANCZOS)
+
+        # Composite onto white background if alpha/transparency exists
+        if img.mode in ("RGBA", "LA") or (img.mode == "P" and "transparency" in img.info):
+            bg = Image.new("RGB", img.size, (255, 255, 255))
+            if img.mode != "RGBA":
+                img = img.convert("RGBA")
+            bg.paste(img, mask=img.split()[3])
+            img_to_save = bg
+        else:
+            img_to_save = img.convert("RGB")
+
+        with tempfile.NamedTemporaryFile(suffix=".jpg", delete=False) as tmp:
+            img_to_save.save(tmp, format="JPEG", quality=95)
+            tmp_path = tmp.name
+
         from deepface import DeepFace
 
-        img = file_to_numpy(file_bytes)
         reps = None
-
-        # 1. Primary detector (opencv or configured detector) with enforce_detection=True
-        # When enforce_detection=True, if no face is found it raises an exception and cleanly falls back.
         detector_backend = DETECTOR if DETECTOR and DETECTOR != "skip" else "opencv"
+        last_error = None
+
+        # 1. Primary detector (opencv or configured) with enforce_detection=True
         try:
             reps = DeepFace.represent(
-                img_path=img,
+                img_path=tmp_path,
                 model_name=MODEL,
                 detector_backend=detector_backend,
                 enforce_detection=True,
             )
         except Exception as e:
-            # Face not detected by primary detector
+            last_error = f"{detector_backend} failed: {e}"
             reps = None
 
         # 2. Secondary fallback detector if primary was not opencv
         if not reps and detector_backend != "opencv":
             try:
                 reps = DeepFace.represent(
-                    img_path=img,
+                    img_path=tmp_path,
                     model_name=MODEL,
                     detector_backend="opencv",
                     enforce_detection=True,
                 )
-            except Exception:
+            except Exception as e:
+                last_error = f"opencv fallback failed: {e}"
                 reps = None
 
         # 3. Third fallback: skip detector (handles composite sketches, drawings, and cropped face photos)
         if not reps:
             try:
                 reps = DeepFace.represent(
-                    img_path=img,
+                    img_path=tmp_path,
                     model_name=MODEL,
                     detector_backend="skip",
                     enforce_detection=False,
                 )
             except Exception as e:
-                print("DeepFace skip detector fallback error:", repr(e))
+                last_error = f"skip fallback failed: {e}"
                 reps = None
 
         if not reps or len(reps) == 0:
-            print("[DeepFace] No representation extracted from image")
-            return None
+            print("[DeepFace] No representation extracted from image:", last_error)
+            return None, (last_error or "No face representations returned")
 
         emb = np.array(reps[0]["embedding"], dtype=np.float32)
         norm = float(np.linalg.norm(emb))
         if norm == 0 or np.isnan(norm):
-            return None
+            return None, "Extracted embedding has zero or NaN norm"
 
         emb = emb / norm
-        return emb.tolist()
+        return emb.tolist(), None
 
     except Exception as e:
         print("Embedding extraction error:", repr(e))
-        return None
+        return None, f"Extraction exception: {e}"
     finally:
+        if tmp_path:
+            try:
+                if os.path.exists(tmp_path):
+                    os.remove(tmp_path)
+            except Exception:
+                pass
         _model_lock.release()
 
 
 def _warmup_model():
-    """Pre-warms TensorFlow and Facenet512 on worker startup."""
+    """Pre-warms TensorFlow and Facenet512 on worker startup using a temp file."""
     global _model_ready, _model_warmup_error
+    tmp_warmup = None
     try:
         from deepface import DeepFace
-        dummy = np.full((160, 160, 3), 255, dtype=np.uint8)
+        dummy_img = Image.new("RGB", (160, 160), color=(200, 200, 200))
+        with tempfile.NamedTemporaryFile(suffix=".jpg", delete=False) as tmp:
+            dummy_img.save(tmp, format="JPEG")
+            tmp_warmup = tmp.name
+
         with _model_lock:
-            DeepFace.represent(img_path=dummy, model_name=MODEL, detector_backend="skip", enforce_detection=False)
+            DeepFace.represent(
+                img_path=tmp_warmup,
+                model_name=MODEL,
+                detector_backend="skip",
+                enforce_detection=False,
+            )
         _model_ready = True
         print(f"[DeepFace] Model {MODEL} successfully pre-warmed and ready.")
     except Exception as e:
         _model_warmup_error = str(e)
         print("[DeepFace] Warmup notice:", repr(e))
+    finally:
+        if tmp_warmup:
+            try:
+                if os.path.exists(tmp_warmup):
+                    os.remove(tmp_warmup)
+            except Exception:
+                pass
 
 
 threading.Thread(target=_warmup_model, daemon=True).start()
@@ -392,12 +438,12 @@ def api_upload_and_match():
     if not file_bytes:
         return jsonify({"error": "Uploaded image file is empty"}), 400
 
-    query_emb = get_embedding(file_bytes)
+    query_emb, err_detail = get_embedding(file_bytes)
     if query_emb is None:
         return (
             jsonify(
                 {
-                    "error": "Could not detect face features in the uploaded image. Please ensure the image shows a visible face, or try generating a clearer sketch."
+                    "error": f"Could not detect face features in the uploaded image ({err_detail}). Please ensure the image shows a visible front-facing face."
                 }
             ),
             400,
@@ -474,12 +520,12 @@ def api_enroll():
 
     file_bytes = file.read()
 
-    embedding = get_embedding(file_bytes)
+    embedding, err_detail = get_embedding(file_bytes)
     if embedding is None:
         return (
             jsonify(
                 {
-                    "message": "Could not extract face features. If you just started the server, try again in 1–2 minutes. Otherwise use a clear, front-facing face image."
+                    "message": f"Could not extract face features ({err_detail}). If you just started the server, try again in 1–2 minutes. Otherwise use a clear, front-facing face image."
                 }
             ),
             400,
@@ -598,6 +644,7 @@ def health_check():
         "service": "FORENSIGHT Face Recognition API",
         "model": MODEL,
         "modelReady": _model_ready,
+        "warmupError": _model_warmup_error,
         "timestamp": datetime.now(timezone.utc).isoformat()
     }), 200
 
@@ -637,7 +684,7 @@ def enroll():
 
     file_bytes = file.read()
 
-    embedding = get_embedding(file_bytes)
+    embedding, _ = get_embedding(file_bytes)
     if embedding is None:
         flash(
             "❌ Could not extract face features (try a clearer front-facing image)",
@@ -681,7 +728,7 @@ def search():
 
     file_bytes = file.read()
 
-    query_emb = get_embedding(file_bytes)
+    query_emb, _ = get_embedding(file_bytes)
     if query_emb is None:
         flash(
             "❌ Could not extract face features (try a clearer front-facing image)",
